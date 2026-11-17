@@ -4,11 +4,11 @@ private func draftConfig(
     providers: [String]? = nil, labels: ExactConfigMap = [:], metrics: ExactConfigMap = [:],
     nodePath: String = "/usr/bin/node", profile: String = "default", refreshSeconds: Double = 60,
     cacheMinutes: Double = 5, timeoutSeconds: Double = 25, warnPercent: Double = 70, criticalPercent: Double = 90,
-    showPace: Bool = true
+    showPace: Bool = true, externalSources: [ExternalSource] = []
 ) -> PanelConfig {
     PanelConfig(version: 1, nodePath: nodePath, ompPath: "/usr/local/bin/omp", profile: profile, refreshSeconds: refreshSeconds,
                 cacheMinutes: cacheMinutes, timeoutSeconds: timeoutSeconds, providers: providers, labels: labels,
-                metrics: metrics, warnPercent: warnPercent, criticalPercent: criticalPercent, showPace: showPace)
+                metrics: metrics, warnPercent: warnPercent, criticalPercent: criticalPercent, showPace: showPace, externalSources: externalSources)
 }
 
 /// Draft semantics at the consumer boundary: lossless round trip of committed values, explicit null vs [],
@@ -32,6 +32,15 @@ func runGeneralSettingsDraftTests() {
         draftConfig(warnPercent: 0, criticalPercent: 0),
     ]
     for sample in samples { precondition(committed(Draft(config: sample)) == sample, "unchanged draft must commit the original config") }
+    let externalConfig = draftConfig(externalSources: [ExternalSource(providerId: "google-antigravity", path: "/private/quota.json")])
+    var externalDraft = Draft(config: externalConfig)
+    precondition(committed(externalDraft) == externalConfig, "opening Settings preserves file opt-ins")
+    externalDraft.profile = "other-profile"
+    externalDraft.refreshSeconds = "30"
+    let externalCommit = try? externalDraft.commit()
+    precondition(externalCommit?.config.externalSources == externalConfig.externalSources, "Save preserves external sources while editing normal settings")
+    let restoredExternal = externalCommit.flatMap { try? PanelConfigStore.decode(PanelConfigStore.serialize($0.config)) }
+    precondition(restoredExternal?.externalSources == externalConfig.externalSources, "Settings save/load round trip cannot erase external sources")
 
     // Provider mode: automatic is nil, custom with no rows is [] (both expressible); rows survive mode switches.
     var draft = Draft(config: draftConfig(providers: nil))
